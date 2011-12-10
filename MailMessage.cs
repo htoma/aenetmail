@@ -112,7 +112,7 @@ namespace AE.Net.Mail {
       Cc = Headers.GetAddresses("Cc");
       Bcc = Headers.GetAddresses("Bcc");
       Sender = Headers.GetAddresses("Sender").FirstOrDefault();
-      ReplyTo = Headers.GetAddresses("Reply-To").FirstOrDefault();
+      ReplyTo = Headers.GetAddresses("In-Reply-To").FirstOrDefault();
       From = Headers.GetAddresses("From").FirstOrDefault();
       MessageID = Headers["Message-ID"].RawValue;
 
