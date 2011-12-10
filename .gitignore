@@ -43,7 +43,7 @@ Cache\*
 *.docstates
 *.vssscc
 thumbs.db
-_ReSharper*\*
+_ReSharper(.*?)\*
 error-*.xml
 TestResults\*
 *.vsp
