@@ -45,6 +45,8 @@ Cache\*
 thumbs.db
 /_ReSharper.*
 *.ReSharper.*
+/bin*
+/obj*
 error-*.xml
 TestResults\*
 *.vsp
