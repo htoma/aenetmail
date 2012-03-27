@@ -3,10 +3,10 @@ using System;
 namespace AE.Net.Mail {
   public abstract class ObjectWHeaders {
     public string RawHeaders { get; internal set; }
-    private HeaderCollection _Headers;
-    public HeaderCollection Headers {
+    private HeaderDictionary _Headers;
+    public HeaderDictionary Headers {
       get {
-        return _Headers ?? (_Headers = HeaderCollection.Parse(RawHeaders));
+        return _Headers ?? (_Headers = HeaderDictionary.Parse(RawHeaders));
       }
       internal set {
         _Headers = value;
@@ -45,7 +45,11 @@ namespace AE.Net.Mail {
         //only decode the content if it is a text document
               && ContentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
               && Utilities.IsValidBase64String(value)) {
-        value = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(value));
+        var data = Convert.FromBase64String(value);
+        using (var mem = new System.IO.MemoryStream(data))
+        using (var str = new System.IO.StreamReader(mem, true))
+          value = str.ReadToEnd();
+
         ContentTransferEncoding = string.Empty;
       }
 

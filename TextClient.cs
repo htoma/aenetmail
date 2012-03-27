@@ -6,15 +6,18 @@ namespace AE.Net.Mail {
   public abstract class TextClient : IDisposable {
     protected TcpClient _Connection;
     protected Stream _Stream;
-    protected StreamReader _Reader;
 
     public string Host { get; private set; }
-
     public int Port { get; set; }
     public bool Ssl { get; set; }
     public bool IsConnected { get; private set; }
     public bool IsAuthenticated { get; private set; }
     public bool IsDisposed { get; private set; }
+    public System.Text.Encoding Encoding { get; set; }
+
+    public TextClient() {
+      Encoding = System.Text.Encoding.UTF8;
+    }
 
     internal abstract void OnLogin(string username, string password);
     internal abstract void OnLogout();
@@ -41,7 +44,14 @@ namespace AE.Net.Mail {
     }
 
 
-    public void Connect(string hostname, int port, bool ssl) {
+    public void Connect(string hostname, int port, bool ssl, bool skipSslValidation) {
+      System.Net.Security.RemoteCertificateValidationCallback validateCertificate = null;
+      if (skipSslValidation)
+        validateCertificate = (sender, cert, chain, err) => true;
+      Connect(hostname, port, ssl, validateCertificate);
+    }
+
+    public void Connect(string hostname, int port, bool ssl, System.Net.Security.RemoteCertificateValidationCallback validateCertificate) {
       try {
         Host = hostname;
         Port = port;
@@ -50,32 +60,38 @@ namespace AE.Net.Mail {
         _Connection = new TcpClient(hostname, port);
         _Stream = _Connection.GetStream();
         if (ssl) {
-          var sslSream = new System.Net.Security.SslStream(_Stream);
-          _Stream = sslSream;
-          sslSream.AuthenticateAsClient(hostname);
+          System.Net.Security.SslStream sslStream;
+          if (validateCertificate != null)
+            sslStream = new System.Net.Security.SslStream(_Stream, false, validateCertificate);
+          else
+            sslStream = new System.Net.Security.SslStream(_Stream, false);
+          _Stream = sslStream;
+          sslStream.AuthenticateAsClient(hostname);
         }
 
-        _Reader = new StreamReader(_Stream, System.Text.Encoding.Default);
-        string info = _Reader.ReadLine();
-        OnConnected(info);
+        OnConnected(GetResponse());
 
         IsConnected = true;
         Host = hostname;
       } catch (Exception) {
         IsConnected = false;
+        Utilities.TryDispose(ref _Stream);
         throw;
       }
     }
 
     protected void CheckConnectionStatus() {
-      if (IsDisposed) throw new ObjectDisposedException(this.GetType().Name);
-      if (!IsConnected) throw new Exception("You must connect first!");
-      if (!IsAuthenticated) throw new Exception("You must authenticate first!");
+      if (IsDisposed)
+        throw new ObjectDisposedException(this.GetType().Name);
+      if (!IsConnected)
+        throw new Exception("You must connect first!");
+      if (!IsAuthenticated)
+        throw new Exception("You must authenticate first!");
     }
 
     protected virtual void SendCommand(string command) {
-      byte[] data = System.Text.Encoding.Default.GetBytes(command + "\r\n");
-      _Stream.Write(data, 0, data.Length);
+      var bytes = System.Text.Encoding.Default.GetBytes(command + "\r\n");
+      _Stream.Write(bytes, 0, bytes.Length);
     }
 
     protected string SendCommandGetResponse(string command) {
@@ -84,7 +100,19 @@ namespace AE.Net.Mail {
     }
 
     protected virtual string GetResponse() {
-      return _Reader.ReadLine();
+      byte b;
+      using (var mem = new System.IO.MemoryStream()) {
+        while (true) {
+          b = (byte)_Stream.ReadByte();
+          if ((b == 10 || b == 13)) {
+            if (mem.Length > 0 && b == 10) {
+              return Encoding.GetString(mem.ToArray());
+            }
+          } else {
+            mem.WriteByte(b);
+          }
+        }
+      }
     }
 
     protected void SendCommandCheckOK(string command) {
@@ -92,26 +120,30 @@ namespace AE.Net.Mail {
     }
 
     public void Disconnect() {
-      Logout();
-      if (_Reader != null) {
-        _Reader.Dispose();
-      }
-      if (_Stream != null) {
-        _Stream.Dispose();
-      }
+      if (IsAuthenticated)
+        Logout();
+
+      Utilities.TryDispose(ref _Stream);
+      Utilities.TryDispose(ref _Connection);
     }
 
     public void Dispose() {
-      try {
-        OnDispose();
-      } catch (Exception) { }
+      Dispose(true);
+      GC.SuppressFinalize(this);
+    }
 
-      Disconnect();
+    public virtual void Dispose(bool disposing) {
+      if (disposing) {
+        Disconnect();
 
-      IsDisposed = true;
-      _Stream = null;
-      _Reader = null;
-      _Connection = null;
+        try {
+          OnDispose();
+        } catch (Exception) { }
+
+        IsDisposed = true;
+        _Stream = null;
+        _Connection = null;
+      }
     }
   }
 }

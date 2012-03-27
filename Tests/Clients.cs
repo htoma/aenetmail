@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Linq;
 using AE.Net.Mail;
-using AE.Net.Mail.Imap;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Should.Fluent;
 
@@ -12,22 +11,56 @@ namespace Tests {
 
     [TestMethod]
     public void TestIDLE() {
-      var mre = new System.Threading.ManualResetEvent(false);
+      var mre1 = new System.Threading.ManualResetEventSlim(false);
+      var mre2 = new System.Threading.ManualResetEventSlim(false);
       using (var imap = GetClient<ImapClient>()) {
-        imap.NewMessage += (sender, e) => {
-          var msg = imap.GetMessage(e.MessageCount - 1);
-          Console.WriteLine(msg.Subject);
+        bool fired = false;
+        imap.MessageDeleted += (sender, e) => {
+          fired = true;
+          mre2.Set();
         };
 
-        while (!mre.WaitOne(5000)) //low for the sake of testing; typical timeout is 30 minutes
-          imap.Noop();
+        var count = imap.GetMessageCount();
+        count.Should().Be.InRange(1, int.MaxValue); //interupt the idle thread
+
+        System.Threading.ThreadPool.QueueUserWorkItem(_ => {
+          TestDelete();
+          mre1.Set();
+        });
+
+        mre1.Wait();
+        mre2.Wait(TimeSpan.FromSeconds(15));//give the other thread a moment
+        fired.Should().Be.True();
       }
     }
 
-    void imap_NewMessage(object sender, MessageEventArgs e) {
-      var imap = (sender as ImapClient);
-      var msg = imap.GetMessage(e.MessageCount - 1);
-      Console.WriteLine(msg.Subject);
+    [TestMethod]
+    public void TestMessageWithAttachments() {
+      using (var imap = GetClient<ImapClient>()) {
+        var msg = imap.SearchMessages(SearchCondition.Larger(100 * 1000)).FirstOrDefault().Value;
+
+        msg.Attachments.Count.Should().Be.InRange(1, int.MaxValue);
+
+      }
+    }
+
+    [TestMethod]
+    public void TestSelectFolder() {
+      using (var imap = GetClient<ImapClient>()) {
+        imap.SelectMailbox("Notes");
+        imap.GetMessageCount().Should().Be.InRange(1, int.MaxValue);
+      }
+    }
+
+    [TestMethod]
+    public void TestPolish() {
+      using (var imap = GetClient<ImapClient>()) {
+        var msg = imap.SearchMessages(SearchCondition.Subject("POLISH LANGUAGE TEST")).FirstOrDefault();
+        msg.Value.Should().Not.Be.Null();
+
+        msg.Value.Body.Should().Contain("Cię e-mailem, kiedy Kupują");
+
+      }
     }
 
     [TestMethod]
@@ -49,6 +82,9 @@ namespace Tests {
           msg.Subject.Should().Not.Be.NullOrEmpty();
           msg = mail.GetMessage(0, false);
           msg.Body.Should().Not.Be.NullOrEmpty();
+
+          mail.Disconnect();
+          mail.Disconnect();
         }
     }
 
@@ -86,8 +122,80 @@ namespace Tests {
       }
     }
 
+    [TestMethod]
+    public void TestIssue49() {
+      using (var client = GetClient<ImapClient>()) {
+        var msg = client.SearchMessages(SearchCondition.Subject("aenetmail").And(SearchCondition.Subject("#49"))).Select(x => x.Value).FirstOrDefault();
+        msg.Should().Not.Be.Null();
+        msg.AlternateViews.FirstOrDefault(x=>x.ContentType.Contains("html")).Body.Should().Not.Be.Null();
+      }
+    }
+
+    [TestMethod]
+    public void TestAppendMail() {
+      using (var client = GetClient<ImapClient>()) {
+        var msg = new MailMessage {
+          Subject = "TEST",
+          Body = "Appended!"
+        };
+        msg.Date = DateTime.Now;
+
+        client.AppendMail(msg, "Inbox");
+      }
+    }
+
+    [TestMethod]
+    public void TestParseImapHeader() {
+      var header = @"X-GM-THRID 1320777376118077475 X-GM-MSGID 1320777376118077475 X-GM-LABELS () UID 8286 RFC822.SIZE 9369 FLAGS (\Seen) BODY[] {9369}";
+
+      var values = ImapClient.ParseImapHeader(header);
+      values["FLAGS"].Should().Equal(@"\Seen");
+      values["UID"].Should().Equal("8286");
+      values["X-GM-MSGID"].Should().Equal("1320777376118077475");
+      values["X-GM-LABELS"].Should().Be.NullOrEmpty();
+      values["RFC822.SIZE"].Should().Equal("9369");
+    }
+
+    [TestMethod]
+    public void TestGetSeveralMessages() {
+      int numMessages = 1000;
+      using (var imap = GetClient<ImapClient>()) {
+        var msgs = imap.GetMessages(0, numMessages - 1, true);
+        msgs.Length.Should().Equal(numMessages);
+        msgs.Count(x => string.IsNullOrEmpty(x.Subject)).Should().Equal(0);
+      }
+      using (var imap = GetClient<ImapClient>()) {
+        var msgs = imap.GetMessages(0, numMessages - 1, false);
+        msgs.Length.Should().Equal(numMessages);
+        msgs.Count(x => string.IsNullOrEmpty(x.Subject)).Should().Equal(0);
+      }
+    }
+
+    [TestMethod]
+    public void TestDelete() {
+      using (var client = GetClient<ImapClient>()) {
+        var lazymsg = client.SearchMessages(SearchCondition.From("DRAGONEXT")).FirstOrDefault();
+        var msg = lazymsg == null ? null : lazymsg.Value;
+        msg.Should().Not.Be.Null();
+
+        var uid = msg.Uid;
+        client.DeleteMessage(msg);
+
+        msg = client.GetMessage(uid);
+        Console.WriteLine(msg);
+      }
+    }
+
+    private string GetSolutionDirectory() {
+      var dir = new System.IO.DirectoryInfo(Environment.CurrentDirectory);
+      while (dir.GetFiles("*.sln").Length == 0) {
+        dir = dir.Parent;
+      }
+      return dir.FullName;
+    }
+
     private T GetClient<T>(string host = "gmail", string type = "imap") where T : class, IMailClient {
-      var accountsToTest = System.IO.Path.Combine(Environment.CurrentDirectory.Split(new[] { "\\AE.Net.Mail\\" }, StringSplitOptions.RemoveEmptyEntries).First(), "ae.net.mail.usernames.txt");
+      var accountsToTest = System.IO.Path.Combine(GetSolutionDirectory(), "..\\ae.net.mail.usernames.txt");
       var lines = System.IO.File.ReadAllLines(accountsToTest)
           .Select(x => x.Split(','))
           .Where(x => x.Length == 6)

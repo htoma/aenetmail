@@ -4,8 +4,9 @@ using System.Text;
 namespace AE.Net.Mail {
     public class Pop3Client : TextClient, IMailClient {
         public Pop3Client() { }
-        public Pop3Client(string host, string username, string password, int port = 110, bool secure = false) {
-            Connect(host, port, secure);
+        public Pop3Client(string host, string username, string password, int port = 110, bool secure = false, bool skipSslValidation = false)
+        {
+            Connect(host, port, secure, skipSslValidation);
             Login(username, password);
         }
 
@@ -15,7 +16,10 @@ namespace AE.Net.Mail {
         }
 
         internal override void OnLogout() {
-            SendCommand("QUIT");
+            if (_Stream != null)
+            {
+                SendCommand("QUIT");
+            }
         }
 
         internal override void CheckResultOK(string result) {
@@ -55,7 +59,7 @@ namespace AE.Net.Mail {
             string line = SendCommandGetResponse(string.Format(headersOnly ? "TOP {0} 0" : "RETR {0}", uid));
             while (line != ".") {
                 result.AppendLine(line);
-                line = _Reader.ReadLine();
+                line = GetResponse();
             }
 
             var msg = new MailMessage();
